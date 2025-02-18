@@ -6,13 +6,13 @@ Leonard Riemer - 07/02/2025
 """
 
 # Import relevant libraries
-from hipersim import MannTurbulenceField
-import numpy as np
-import pylab as plt
-from constraint import turb_constr_kaimal
-from iec_definitions import *
-from common import loadFromJSON
 import os.path
+from hipersim import MannTurbulenceField
+import pylab as plt
+from iec_definitions import *
+from common import *
+from constraint import constraint_gen
+
 
 # Location of input files
 # Shorten the imports
@@ -24,15 +24,14 @@ dtu10mw = loadFromJSON(fp("dtu10mw.json"))  # Includes wind & turbulence class w
 # Define wind parameters based on DTU 10 MW reference
 U = dtu10mw["V_ave"]
 TI = dtu10mw["I_ref"]
-sigma_1 = get_sigma_1(U, TI)
 
 # Define simulation paramters
 params = {}
 params["L"] = get_length(dtu10mw["zhub"])                   # Turbulence length [m]
-params["alphaepsilon"] = get_strength(sigma_1)              # Turbulence strength [m^(4/3)/s^2]
+params["alphaepsilon"] = get_strength()                     # Turbulence strength [m^(4/3)/s^2], default set to 1 and scale timeseries
 params["Gamma"] = get_anisotropy()                          # Anisotropy [-]
-params["Nxyz"] = (1024,105,105)                             # Dimensions of turbulence box
-params["dxyz"] = (4,2,2)                                    # Spacing between points [m]
+params["Nxyz"] = (1024,120,120)                             # Dimensions of turbulence box
+params["dxyz"] = (2,2,2)                                    # Spacing between points [m]
 params["seed"] = 1                                          # Seed for random number gen
 params["HighFreqComp"] = 1                                  # Compensation at high frequencies to make sure 5/3 law?
 params["double_xyz"] = (False, True, True)                  # Doubling along given axis for bigger box
@@ -49,6 +48,12 @@ mtf = MannTurbulenceField.generate(alphaepsilon = params["alphaepsilon"],
 
 # Store turbulence data in variables (uvw correspond to xyz directions)
 u,v,w = mtf.uvw
+
+# Scale box to match the IEC wind and turbulence class
+print (f'Before: Box TI={mtf.uvw[0].std(0).mean()/U:.3f}, alphaepsilon:{mtf.alphaepsilon:.3f}, theoretical spectrum TI {mtf.spectrum_TI(U):.2f}')
+mtf.scale_TI(TI=TI, U=U)
+print (f'After: Box TI={mtf.uvw[0].std(0).mean()/U:.3f}, alphaepsilon:{mtf.alphaepsilon:.3f}, theoretical spectrum TI {mtf.spectrum_TI(U):.2f}')
+print(f'Iref = {TI}, TI = {mtf.uvw[0].std(0).mean()/U:.3f}; Difference due to uncertainty in lower frequencies and seed-to-seed differences.')
 
 # Export the data to an array
 da = mtf.to_xarray() # xarray dataarray
@@ -74,50 +79,47 @@ plt.plot([], ':', color='gray', label='Integrated')
 plt.xlabel('Wave number, $k_1$ $  [m^{-1}$]')
 plt.ylabel('$k_1 S(k_1)[m^2s^{-2}]$')
 plt.legend()
-plt.title("Generated component spectra, Realization vs Lookup vs Analytical")
+plt.grid()
 
-# Variance of uu spectrum
-# Here still not sure what the differences mean...
+# Variance of uu spectrum vs variance of realization
 var_uu_spec = mtf.spectrum_variance()
 print("Spectrum Variance", var_uu_spec)
 var_uu_real = mtf.uvw[0].var(0).mean()
 print("Realization Variance", var_uu_real)
-print("Initial Variance", sigma_1)
 
 # Plot a front view of the turbulence at x = 0 plane
 plt.figure()
 da.sel(uvw='u',x=0).plot(y='y')
 plt.axis('scaled')
-plt.title("at x=0 Before Constraint")
 
 # Plot a side view of the turbulence at y = 0 plane
 plt.figure()
-da.sel(uvw='u',y=10).plot(x='x')
+plt.title("Before Constraint")
+da.sel(uvw='u',y=0).plot(x='x')
 plt.axis('scaled')
-plt.title("at y=10 Before Constraint")
 
 # Constraints / Plotting a timeseries
-# Turbulence has U=18[m/s] and TI=20% (chosen arbritrarily)
-U_turb = 18
-TI_turb = 0.2
-Constraints = turb_constr_kaimal(U_turb, TI_turb, params["L"])
+# Turbulence has U=10[m/s] and TI=32% (2 * Iref) (chosen arbritrarily)
+U_turb = U
+TI_turb = 2 * TI
+positions = [(100, 100), (110, 110)]
+y1, z1 = positions[0]
+constraints = constraint_gen(positions, U_turb, TI_turb, params["Nxyz"], params["dxyz"], params["L"])
 
 # Plotting "Raw turbulence" before constraining
 axes = plt.subplots(3, 1)[1]
 for ax, c in zip(axes, 'uvw'):
-    da.sel(uvw=c, y=0, z=4).plot(ax=ax, label='Raw turbulence')
+    da.sel(uvw=c, y=y1, z=z1).plot(ax=ax, label='Raw turbulence')
 
 # Use .constrain() method of the mtf object
-# Possible parameters are still not clear, i.e. how to constrain only one component... 
-# Need to check source code since there is nothing in the documentation i think.
-mtf.constrain(Constraints)
+mtf.constrain(constraints)
 
 # Plot "Constraints" (synthetic, Kaimal spectrum-based time series) and "Constrained turbulence"
 for i, (ax, c) in enumerate(zip(axes, 'uvw'), 3):
-    mtf.to_xarray().sel(uvw=c, y=10, z=10).plot(ax=ax, label='Constrained turbulence')
+    mtf.to_xarray().sel(uvw=c, y=y1, z=z1).plot(ax=ax, label='Constrained turbulence')
 
     ax.plot([], '.k', label='Contraints')
-    for con in Constraints:
+    for con in constraints:
         ax.plot(con[0], con[i], '.k')
     ax.legend()
 
@@ -126,22 +128,9 @@ for i, (ax, c) in enumerate(zip(axes, 'uvw'), 3):
 plt.figure()
 da.sel(uvw='u',x=0).plot(y='y')
 plt.axis('scaled')
-plt.title("at x=0 After Constraint")
 
 plt.figure()
-da.sel(uvw='u',y=10).plot(x='x')
+da.sel(uvw='u',y=y1).plot(x='x')
 plt.axis('scaled')
-plt.title("at y=10 After Constraint")
 
-# Create the output folder if it doesn't exist
-output_folder = "outputFig"
-os.makedirs(output_folder, exist_ok=True)
-
-# Get all open figure numbers
-figures = [plt.figure(i) for i in plt.get_fignums()]
-
-# Save each figure as a PDF
-for i, fig in enumerate(figures, start=1):
-    fig.savefig(os.path.join(output_folder, f"figure_{i}.pdf"), format="pdf")
-
-print(f"Saved {len(figures)} figures to '{output_folder}'")
+make_plots("constr")
