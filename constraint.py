@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.interpolate import interp1d
 
 def compute_psd(time_series, fs):
     # Perform FFT and calculate power spectral density (PSD), taken from 46100 Assignment 3
@@ -110,7 +109,6 @@ def turb_constr_kaimal(U_turb, TI_turb, L_turb):
 
     return Constraints
 
-
 def constraint_gen(positions, U_turb, TI_turb, Nxyz_turb, dxyz_turb, L_turb):
     # --- Define Parameters ---
     U = U_turb          # Mean wind speed (m/s)
@@ -121,8 +119,8 @@ def constraint_gen(positions, U_turb, TI_turb, Nxyz_turb, dxyz_turb, L_turb):
     dx, dy, dz = dxyz_turb  # Spacing of Hipersim turbulence box
 
     # --- Define Temporal Grid ---
-    Nt = int(Nx / U)
     dt = dx / U
+    Nt = int((Nx * dx) / (U * dt))
     t = np.arange(0, Nt * dt, dt)
     
     # --- Kaimal Spectrum (IEC 61400) ---
@@ -152,6 +150,70 @@ def constraint_gen(positions, U_turb, TI_turb, Nxyz_turb, dxyz_turb, L_turb):
     u_turb = np.sum(amp_u[:, None] * np.cos(2 * np.pi * f[:, None] * t + phi[:, None]), axis=0) # Cosine for only real part
     v_turb = np.sum(amp_v[:, None] * np.cos(2 * np.pi * f[:, None] * t + phi[:, None]), axis=0) # Cosine for only real part
     w_turb = np.sum(amp_w[:, None] * np.cos(2 * np.pi * f[:, None] * t + phi[:, None]), axis=0) # Cosine for only real part
+
+    wind_fluctuations[:, 0] = u_turb  # u-component
+    wind_fluctuations[:, 1] = v_turb  # v-component
+    wind_fluctuations[:, 2] = w_turb  # w-component
+
+    # --- Add Mean Wind to Turbulence ---
+    # wind_field = U + wind_fluctuations  # Total wind field
+    wind_field = wind_fluctuations  # Only fluctuations
+
+    # --- Y/Z Positions for constrained turbulence ---
+    # constraint_positions = [(y1, z1), (y2, z2)]
+    constraint_positions = positions
+
+    # --- Loop overe Y/Z Positions for constrained turbulence ---
+    constraints_list = []
+
+    for ypos, zpos in constraint_positions:
+        if ypos >= Ny or zpos >= Nz:
+            raise ValueError(f"Constraint position (y={ypos}, z={zpos}) is out of grid bounds Ny={Ny}, Nz={Nz}")
+
+        # --- Generate Constraint Data ---
+        Xconstraints = (t[:, None] * U)  # Time-based x position following x = U * t
+        Yconstraints = np.full_like(Xconstraints, ypos)  # Fixed y position
+        Zconstraints = np.full_like(Xconstraints, zpos)  # Fixed z position
+        Uconstraints = wind_field[:, 0].reshape(-1, 1)  # u-component
+        Vconstraints = wind_field[:, 1].reshape(-1, 1)  # v-component
+        Wconstraints = wind_field[:, 2].reshape(-1, 1)  # w-component
+
+    # Stack data into single array [x, y, z, u, v, w]
+        constraints_data = np.hstack((Xconstraints, Yconstraints, Zconstraints, Uconstraints, Vconstraints, Wconstraints))
+        constraints_list.append(constraints_data)
+
+    # Merge all constraints into one array
+    constraints_array = np.vstack(constraints_list)
+
+
+    return constraints_array
+
+def constraint_wave(positions, U_turb, TI_turb, Nxyz_turb, dxyz_turb, L_turb):
+    # --- Define Parameters ---
+    U = U_turb          # Mean wind speed (m/s)
+    TI = TI_turb        # Turbulence intensity (%)
+    L = L_turb          # Turbulence length scale (m)
+    sigma_1 = TI * U    # Standard deviation of wind fluctuations
+    Nx, Ny, Nz = Nxyz_turb  # X coordinate of Hipersim turbulence box
+    dx, dy, dz = dxyz_turb  # Spacing of Hipersim turbulence box
+
+    # --- Define Temporal Grid ---
+    dt = dx / U
+    Nt = int((Nx * dx) / (U * dt)) // 2
+    t = np.arange(0, Nt * dt, dt)
+    f = 2 / (Nt * dt)
+
+    # --- Generate Time-Series Turbulence ---
+    wind_fluctuations = np.zeros((Nt, 3))  # Array of length Nt for three components (u, v, w)
+
+    # --- Generate three independent turbulent components ---
+    amp_u = 2   # Amplitude scaling (df is constant see linspace)
+    amp_v = 1   # Amplitude scaling (df is constant see linspace)
+    amp_w = 1   # Amplitude scaling (df is constant see linspace)
+    
+    u_turb = amp_u * np.sin(2 * np.pi * f * t)
+    v_turb = amp_v * np.sin(2 * np.pi * f * t)
+    w_turb = amp_w * np.sin(2 * np.pi * f * t)
 
     wind_fluctuations[:, 0] = u_turb  # u-component
     wind_fluctuations[:, 1] = v_turb  # v-component
