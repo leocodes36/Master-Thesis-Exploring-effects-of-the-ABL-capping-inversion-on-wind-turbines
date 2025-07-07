@@ -4,6 +4,7 @@ from matplotlib.widgets import Slider
 import seaborn as sns
 import numpy as np
 from scipy.stats import gaussian_kde
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 def plot_channelstats(stats_df, iec_stats_df):
     channels = [17, 26, 29, 32]
@@ -391,6 +392,9 @@ def plot_channelstats_sliders(stats_df, iec_stats_df):
     fig, axes = plt.subplots(1, len(channels), figsize=(5 * len(channels), 5))
     fig.subplots_adjust(bottom=0.35)
 
+    # Create profile figure once
+    profile_fig, profile_ax = plt.subplots(figsize=(4, 6))
+
     # Ensure axes is always a list
     if len(channels) == 1:
         axes = [axes]
@@ -500,6 +504,10 @@ def plot_channelstats_sliders(stats_df, iec_stats_df):
 
         fig.canvas.draw_idle()
 
+        # Wind profile in separate figure
+        plot_wind_profile(filtered_df, profile_ax)
+        profile_fig.canvas.draw_idle()
+
     # Attach the update function to sliders
     for slider in sliders:
         slider.on_changed(update)
@@ -527,6 +535,9 @@ def plot_selected_blade_pdfs_with_sliders(pdf_df, iec_pdf_df):
     # Create 2x2 subplot grid
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     plt.subplots_adjust(wspace=0.3, hspace=0.3)
+
+    # Create profile figure once
+    profile_fig, profile_ax = plt.subplots(figsize=(4, 6))
 
     # Flatten axes for easy indexing
     axes = axes.flatten()
@@ -573,6 +584,10 @@ def plot_selected_blade_pdfs_with_sliders(pdf_df, iec_pdf_df):
 
         fig.canvas.draw_idle()
 
+        # Wind profile in separate figure
+        plot_wind_profile(filtered_df, profile_ax)
+        profile_fig.canvas.draw_idle()
+
     for slider in sliders:
         slider.on_changed(update)
 
@@ -592,6 +607,9 @@ def plot_channel_pdf_with_sliders(pdf_df, iec_pdf_df, channel_number):
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), gridspec_kw={"width_ratios": [2, 1]})
     plot_ax, slider_ax = axes
     slider_ax.axis('off')  # We'll place sliders manually
+
+    # Create profile figure once
+    profile_fig, profile_ax = plt.subplots(figsize=(4, 6))
 
     # Create sliders in the right subplot
     sliders = []
@@ -627,6 +645,10 @@ def plot_channel_pdf_with_sliders(pdf_df, iec_pdf_df, channel_number):
             plot_ax.text(0.5, 0.5, f"No data for channel {channel_number}", ha="center", va="center")
 
         fig.canvas.draw_idle()
+
+        # Wind profile in separate figure
+        plot_wind_profile(filtered_df, profile_ax)
+        profile_fig.canvas.draw_idle()
 
     for slider in sliders:
         slider.on_changed(update)
@@ -677,6 +699,9 @@ def plot_channel_ws_overview_sliders(stats_df, iec_stats_df):
     # Create figure with 2 subplots (mean ± stdev, P90–P99)
     fig, (ax_mean, ax_p) = plt.subplots(1, 2, figsize=(14, 5))
     fig.subplots_adjust(bottom=0.35)
+
+    # Create profile figure once
+    profile_fig, profile_ax = plt.subplots(figsize=(4, 6))
 
     sliders = []
 
@@ -755,6 +780,10 @@ def plot_channel_ws_overview_sliders(stats_df, iec_stats_df):
         ax_p.legend()
 
         fig.canvas.draw_idle()
+        
+        # Wind profile in separate figure
+        plot_wind_profile(filtered_df, profile_ax)
+        profile_fig.canvas.draw_idle()
 
     # Attach update function to sliders
     for _, slider in sliders:
@@ -762,6 +791,95 @@ def plot_channel_ws_overview_sliders(stats_df, iec_stats_df):
 
     update()
     plt.show()
+
+def plot_wind_profile(df, ax=None):
+    """
+    Plot wind profile in a separate figure from a filtered DataFrame.
+
+    Parameters:
+    - df: Filtered pandas DataFrame (expects exactly one row)
+    """
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(4, 6))
+    else:
+        fig = ax.figure
+        ax.clear()
+
+    # Define vertical space
+    Nz = 500                            # 500 grid points
+    dz = 1                              # Spacing of dz 1 [m]
+    z = np.arange(dz, Nz*dz, dz)        # vertical space array starting from 0
+    zhub = 119
+
+    if df.empty:
+        ax.set_title("Wind profile data not available")
+        return fig, ax
+
+    row = df.iloc[0].copy()
+
+    if "ws" not in df.columns:
+        row["ws"] = 10.0
+
+    ax.set_ylim(29, 209)
+
+    if "shear" in df.columns:
+        PowerLaw = row["ws"] * (z / zhub)**row["shear"]
+        alpha = getAlpha(PowerLaw[29:209], zhub, dz)
+        alphaTop = getAlphaTopHalf(PowerLaw[29:209], zhub, dz)
+        ax.plot(PowerLaw, z, color="cornflowerblue")
+        ax.text(0.05, 0.05, f"shear: {alpha:.2f} \ntopshear: {alphaTop:.2f}", transform=ax.transAxes,
+        fontsize=10, verticalalignment='bottom',
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7))
+        ax.set_title("Wind Profile")
+        ax.set_xlabel("Wind Speed [m/s]")
+        ax.set_ylabel("Height [m]")
+        ax.grid(True)
+        return fig, ax
+    
+    if "h" and "w" and "s" in df.columns:
+        PowerLaw = row["ws"] * (z / zhub)**(0.2)
+        Jet = PowerLaw + row["s"] * np.exp(-((z - row["h"]) / row["w"])**2)
+        alpha = getAlpha(Jet[29:209], zhub, dz)
+        alphaTop = getAlphaTopHalf(Jet[29:209], zhub, dz)
+        ax.plot(Jet, z, color="cornflowerblue")
+        ax.text(0.05, 0.05, f"shear: {alpha:.2f} \ntopshear: {alphaTop:.2f}", transform=ax.transAxes,
+        fontsize=10, verticalalignment='bottom',
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7))
+        ax.set_title("Wind Profile")
+        ax.set_xlabel("Wind Speed [m/s]")
+        ax.set_ylabel("Height [m]")
+        ax.grid(True)
+        return fig, ax
+    
+    if "n" and "a" in df.columns:
+        dUdz = (row["ws"] * row["ti"]) / (33.6)
+        LinearShear = row["ws"] + (z - zhub) * dUdz
+        alpha = getAlpha(LinearShear[29:209], zhub, dz)
+        alphaTop = getAlphaTopHalf(LinearShear[29:209], zhub, dz)
+        PowerLaw = row["ws"] * (z / zhub)**alpha
+        ax.plot(PowerLaw, z, color="cornflowerblue")
+        ax.text(0.05, 0.05, f"shear: {alpha:.2f} \ntopshear: {alphaTop:.2f}", transform=ax.transAxes,
+        fontsize=10, verticalalignment='bottom',
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.7))
+        ax.set_title("Wind Profile", loc="left")
+        ax.set_xlabel("Wind Speed [m/s]")
+        ax.set_ylabel("Height [m]")
+        ax.grid(True)
+
+        dt = 600 / 1024
+        t = np.arange(0.1*1024*dt, 1024*dt, dt)
+        wave = row["a"] * np.sin(2 * np.pi * row["n"] * t)
+        ax_inset = inset_axes(ax, width="40%", height="30%", loc=1)
+        ax_inset.set_xlim(0, 600)
+        ax_inset.plot(t, wave, color="darkorange")
+        ax_inset.set_xlabel("Time [s]")
+        ax_inset.set_ylabel("Ampltude [m/s]")
+        ax_inset.grid(True)
+        return fig, ax
+
+    else:
+        ax.set_title("Wind profile data not available")
+        return fig, ax
 
 def plot_joint_probabilities(stats_df, channel):
     ch_df = stats_df[stats_df["channel"] == channel]
@@ -882,3 +1000,49 @@ def plot_del_ws_overview(stats_df, iec_stats_df):
             bbox=dict(boxstyle="round", facecolor="white", alpha=0.7))
 
     plt.tight_layout(rect=[0, 0.05, 1, 1])
+
+def getAlpha(WindSpeeds, zhub, dz):
+    """
+    Estimates the power-law shear exponent (alpha) from a vertical wind speed profile.
+
+    This function fits a power-law model to the input wind speed profile using 
+    a log-log regression, assuming the vertical coordinates are evenly spaced around 
+    the hub height.
+
+    Parameters:
+    WindSpeeds (array-like): 1D array of wind speed values sampled vertically.
+    zhub (float):            Hub height (m) around which the wind speeds are centered.
+    dz (float):              Vertical spacing between wind speed samples (m).
+
+    Returns:
+    float: Estimated power-law shear exponent (alpha), representing how wind speed 
+           changes with height according to the power-law model.
+    """
+    z = np.arange(zhub - (len(WindSpeeds) * dz) // 2, 
+              zhub + (len(WindSpeeds) * dz) // 2, dz)
+    alpha, intercept = np.polyfit(np.log(z),np.log(WindSpeeds), 1)
+    return alpha
+
+def getAlphaTopHalf(WindSpeeds, zhub, dz):
+    """
+    Estimates the power-law shear exponent (alpha) for the top half of the rotor.
+
+    Fits a power-law model using only the upper half of the vertical wind speed 
+    profile, based on log-log regression. The height levels are assumed to be evenly 
+    spaced and centered around the hub height.
+
+    Parameters:
+    WindSpeeds (array-like): 1D array of wind speeds sampled over the rotor span.
+    zhub (float):            Hub height in meters.
+    dz (float):              Vertical spacing between wind speed samples (m).
+
+    Returns:
+    float: Estimated shear exponent (alpha) from the top half of the profile.
+    """
+    z = zhub + dz * (np.arange(len(WindSpeeds)) - len(WindSpeeds) // 2)
+    top_half_start = len(WindSpeeds) // 2
+    z_top_half = z[top_half_start:]
+    WindSpeeds_top_half = WindSpeeds[top_half_start:]
+    
+    alphatop50, _ = np.polyfit(np.log(z_top_half), np.log(WindSpeeds_top_half), 1)
+    return alphatop50
